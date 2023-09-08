@@ -2,6 +2,7 @@ import requests
 import discord
 from discord import Intents
 import asyncio
+import json
 import ranktier
 from datetime import datetime, timedelta
 from PIL import Image
@@ -40,6 +41,14 @@ PLAYERS = [{
 last_sent_matches = {}
 logger.add("bot.log", rotation="1 day", retention="7 days", level="DEBUG")
 MATCH_DATA_FILE = 'matches.json'
+if os.path.exists(MATCH_DATA_FILE):
+    try:
+        with open(MATCH_DATA_FILE, 'r') as file:
+            last_sent_matches = json.load(file)
+    except json.JSONDecodeError:
+        print(f"Error loading JSON data from {MATCH_DATA_FILE}. Initializing last_sent_matches as an empty dictionary.")
+else:
+    print(f"{MATCH_DATA_FILE} not found. Initializing last_sent_matches as an empty dictionary.")
 intents = Intents.default()
 intents.typing = False
 intents.presences = False
@@ -269,186 +278,179 @@ def get_win_loss_stats(matches_data):
 
 
 async def send_latest_match_result(channel):
-  for player in PLAYERS:
-    player_id = player["PLAYER_ID"]
-    player_nickname = player["NICKNAME"]
-    matches_data = get_matches(player_id)
+    for player in PLAYERS:
+        player_id = player["PLAYER_ID"]
+        player_nickname = player["NICKNAME"]
+        matches_data = get_matches(player_id)
 
-    # Получите ID последнего матча
-    latest_match_id = matches_data["player"]["matches"][0]["id"]
+        if matches_data is None:
+            continue  # Если данные о матчах равны None, пропустите итерацию
 
-    # Проверьте, был ли этот матч уже отправлен
-    if last_sent_matches.get(player_id) == latest_match_id:
-      continue  # Если этот матч уже был отправлен, пропустите его
+        # Получите ID последнего матча
+        latest_match_id = matches_data["player"]["matches"][0]["id"]
 
-    # Если этот матч не был отправлен, сохраните его ID
-    last_sent_matches[player_id] = latest_match_id
-    win_count, loss_count = get_win_loss_stats(matches_data)
-    logger.info(f"Новый матч {player_nickname}: {latest_match_id}")
-    match = matches_data["player"]["matches"][0]
-    player_data = match["players"][0]
+        # Проверьте, был ли этот матч уже отправлен
+        if last_sent_matches.get(player_id) == latest_match_id:
+            continue  # Если этот матч уже был отправлен, пропустите его
 
-    last_5_matches = matches_data["player"][
-      "matches"][:5]  # Получить последние 5 матчей
-    player_is_radiant = player_data["isRadiant"]
-    player_lane = player_data["lane"]
+        # Если этот матч не был отправлен, сохраните его ID
+        last_sent_matches[player_id] = latest_match_id
+        with open(MATCH_DATA_FILE, 'w') as file:
+            json.dump(last_sent_matches, file)
+        win_count, loss_count = get_win_loss_stats(matches_data)
+        logger.info(f"Новый матч {player_nickname}: {latest_match_id}")
+        match = matches_data["player"]["matches"][0]
+        player_data = match["players"][0]
+        outcome = None
 
-    LANE_OUTCOME_MAP = {
-      True: {
-        "SAFE_LANE": "bottomLaneOutcome",
-        "MID_LANE": "midLaneOutcome",
-        "OFF_LANE": "topLaneOutcome",
-      },
-      False: {
-        "SAFE_LANE": "topLaneOutcome",
-        "MID_LANE": "midLaneOutcome",
-        "OFF_LANE": "bottomLaneOutcome",
-      }
-    }
+        last_5_matches = matches_data["player"]["matches"][:5]  # Получить последние 5 матчей
+        player_is_radiant = player_data["isRadiant"]
+        player_lane = player_data["lane"]
 
-    OUTCOME_NAME_MAP = {
-      True: {
-        "TIE": "Ничья",
-        "RADIANT_VICTORY": "Разьебал",
-        "RADIANT_STOMP": "Застомпил",
-        "DIRE_VICTORY": "Высосал",
-        "DIRE_STOMP": "Пиздец высосал",
-      },
-      False: {
-        "TIE": "Ровно",
-        "RADIANT_VICTORY": "Высосал",
-        "RADIANT_STOMP": "Пиздец высосал",
-        "DIRE_VICTORY": "Разьебал",
-        "DIRE_STOMP": "Жестко разъебал",
-      }
-    }
+        LANE_OUTCOME_MAP = {
+            True: {
+                "SAFE_LANE": "bottomLaneOutcome",
+                "MID_LANE": "midLaneOutcome",
+                "OFF_LANE": "topLaneOutcome",
+            },
+            False: {
+                "SAFE_LANE": "topLaneOutcome",
+                "MID_LANE": "midLaneOutcome",
+                "OFF_LANE": "bottomLaneOutcome",
+            }
+        }
 
-    outcome = LANE_OUTCOME_MAP[player_is_radiant][player_lane]
-    outcome_name = OUTCOME_NAME_MAP[player_is_radiant][match[outcome]]
+        OUTCOME_NAME_MAP ={
+        True: {
+            "TIE": "Ровно",
+            "RADIANT_VICTORY": "Разьебал",
+            "RADIANT_STOMP": "Жестко разъебал",
+            "DIRE_VICTORY": "Высосал",
+            "DIRE_STOMP": "Пиздец высосал",
+        },
+        False: {
+            "TIE": "Ровно",
+            "RADIANT_VICTORY": "Высосал",
+            "RADIANT_STOMP": "Пиздец высосал",
+            "DIRE_VICTORY": "Разьебал",
+            "DIRE_STOMP": "Жестко разъебал",
+        }
+        }
 
-    match_result_images = [
-    ]  # Список для хранения изображений результатов матчей
+        outcome = LANE_OUTCOME_MAP[player_is_radiant][player_lane]
+        outcome_name = OUTCOME_NAME_MAP[player_is_radiant][match[outcome]]
 
-    for match in last_5_matches[::-1]:
-      player_data = match["players"][0]
-      is_victory = player_data[
-        "isVictory"]  # Получить значение победы из данных игрока
+        match_result_images = []  # Список для хранения изображений результатов матчей
 
-      color_matches = 0x00ff00 if is_victory else 0xff0000  # Определить цвет в зависимости от значения победы
+        for match in last_5_matches[::-1]:
+            player_data = match["players"][0]
+            is_victory = player_data["isVictory"]  # Получить значение победы из данных игрока
 
-      if color_matches == 0x00ff00:
-        image = ":green_square:"  # Замените на URL зеленого изображения
-      else:
-        image = ":red_square:"  # Замените на URL красного изображения
+            color_matches = 0x00ff00 if is_victory else 0xff0000  # Определить цвет в зависимости от значения победы
 
-      match_result_images.append(image)  # Добавить изображение в список
-    hero_id = player_data["heroId"]
-    hero_icon_url = get_hero_icon_url(hero_id)
-    victory = player_data["isVictory"]
-    if victory:
-      color = 0x00ff00  # Зеленый цвет
-    else:
-      color = 0xff0000  # Красный цвет
-    avatar = player_data["steamAccount"]["avatar"]
-    nickname = player["NICKNAME"]
-    kills = player_data["kills"]
-    deaths = player_data["deaths"]
-    assists = player_data["assists"]
-    rank = ranktier.Rank(str(match["rank"]))
-    position = player_data["position"].split("_")[-1]
-    imp = player_data["imp"]
-    award = player_data["award"]
+            if color_matches == 0x00ff00:
+                image = ":green_square:"  # Замените на URL зеленого изображения
+            else:
+                image = ":red_square:"  # Замените на URL красного изображения
 
-    embed = discord.Embed(description=" ".join(match_result_images[::-1])
-                          if match_result_images else "None",
-                          color=color)
-    embed.set_thumbnail(url=hero_icon_url)
-    embed.add_field(name="Время",
-                    value=format_duration(match["durationSeconds"]))
-    embed.add_field(name="KDA", value=f"{kills}/{deaths}/{assists}")
-    embed.add_field(name="Аверага", value=f"{rank}")
+            match_result_images.append(image)  # Добавить изображение в список
+        hero_id = player_data["heroId"]
+        hero_icon_url = get_hero_icon_url(hero_id)
+        victory = player_data["isVictory"]
+        if victory:
+            color = 0x00ff00  # Зеленый цвет
+        else:
+            color = 0xff0000  # Красный цвет
+        avatar = player_data["steamAccount"]["avatar"]
+        nickname = player["NICKNAME"]
+        kills = player_data["kills"]
+        deaths = player_data["deaths"]
+        assists = player_data["assists"]
+        rank = ranktier.Rank(str(match["rank"]))
+        position = player_data.get("position")
+        if position is not None:
+            position = position.split("_")[-1]
+        else:
+            position = "Unknown"
+        imp = player_data["imp"]
+        award = player_data["award"]
 
-    if award != "NONE":
-      embed.add_field(
-        name="Матч",
-        value=
-        f"Позиция: {position}\nImp: `{imp}\n`Лайн: {outcome_name}\nНаграда: `{award}\n`"
-      )
-    else:
-      embed.add_field(
-        name="Матч",
-        value=f"Позиция: {position}\nImp: `{imp}\n`Лайн: {outcome_name}\n")
+        embed = discord.Embed(description=" ".join(match_result_images[::-1]) if match_result_images else "None", color=color)
+        embed.set_thumbnail(url=hero_icon_url)
+        embed.add_field(name="Время", value=format_duration(match["durationSeconds"]))
+        embed.add_field(name="KDA", value=f"{kills}/{deaths}/{assists}")
+        embed.add_field(name="Аверага", value=f"{rank}")
 
-    match_id = match["id"]
-    embed.add_field(name="Статистика:",
-                    value=f"Сегодня: {win_count}/{loss_count}")
+        if award != "NONE":
+            embed.add_field(name="Матч", value=f"Позиция: {position}\nImp: `{imp}\n`Лайн: {outcome_name}\nНаграда: `{award}` :medal:\n")
+        else:
+            embed.add_field(name="Матч", value=f"Позиция: {position}\nImp: `{imp}\n`Лайн: {outcome_name}\n")
 
-    embed.set_author(name=f"{nickname}",
-                     url=f"https://stratz.com/matches/{match_id}",
-                     icon_url=f"{avatar}")
-    embed.set_footer(text="")
+        match_id = match["id"]
+        embed.add_field(name="Статистика:", value=f"Сегодня: {win_count}/{loss_count}")
 
-    # Генерация изображений
-    item_ids = [
-      player_data.get('item0Id'),
-      player_data.get('item1Id'),
-      player_data.get('item2Id'),
-      player_data.get('item3Id'),
-      player_data.get('item4Id'),
-      player_data.get('item5Id')
-    ]
+        embed.set_author(name=f"{nickname}", url=f"https://stratz.com/matches/{match_id}", icon_url=f"{avatar}")
+        embed.set_footer(text="")
 
-    item_images = []
-    image_directory = "assets/items/"
+        # Генерация изображений
+        item_ids = [
+            player_data.get('item0Id'),
+            player_data.get('item1Id'),
+            player_data.get('item2Id'),
+            player_data.get('item3Id'),
+            player_data.get('item4Id'),
+            player_data.get('item5Id')
+        ]
 
-    for item_id in item_ids:
-      item_image_path = f"{image_directory}{item_id}.png"
-      try:
-        item_image = Image.open(item_image_path)
-        item_images.append(item_image)
-      except FileNotFoundError:
-        print(f"Изображение для item_id {item_id} не найдено.")
+        item_images = []
+        image_directory = "assets/items/"
 
-    image_width = sum(image.width for image in item_images[:3])
-    image_height = 60
+        for item_id in item_ids:
+            item_image_path = f"{image_directory}{item_id}.png"
+            try:
+                item_image = Image.open(item_image_path)
+                item_images.append(item_image)
+            except FileNotFoundError:
+                print(f"Изображение для item_id {item_id} не найдено.")
 
-    result_image = Image.new("RGBA", (image_width, image_height))
+        image_width = sum(image.width for image in item_images[:3])
+        image_height = 60
 
-    x_offset = 0
-    y_offset = 0
-    for item_image in item_images:
-      result_image.paste(item_image, (x_offset, y_offset))
-      x_offset += item_image.width
-      if x_offset >= image_width:
+        result_image = Image.new("RGBA", (image_width, image_height))
+
         x_offset = 0
-        y_offset += item_image.height
+        y_offset = 0
+        for item_image in item_images:
+            result_image.paste(item_image, (x_offset, y_offset))
+            x_offset += item_image.width
+            if x_offset >= image_width:
+                x_offset = 0
+                y_offset += item_image.height
 
-    try:
-      image_filename = f"{player_id}_items.png"  # Имя файла для сохранения изображения
-      result_image.save(image_filename)
-      file = discord.File(image_filename)
-      embed.set_image(url=f"attachment://{image_filename}")
-    except Exception as e:
-      print(f"Ошибка при сохранении изображения: {e}")
+        try:
+            image_filename = f"{player_id}_items.png"  # Имя файла для сохранения изображения
+            result_image.save(image_filename)
+            file = discord.File(image_filename)
+            embed.set_image(url=f"attachment://{image_filename}")
+        except Exception as e:
+            print(f"Ошибка при сохранении изображения: {e}")
 
-    await channel.send(embed=embed, file=file)
+        await channel.send(embed=embed, file=file)
 
-    match_id = match["id"]
+        match_id = match["id"]
 
 
 @client.event
+@client.event
 async def on_ready():
-  channel = client.get_channel(int(CHANNEL_ID))
-  if channel:
-    while True:
-      await send_latest_match_result(
-        channel)  # Вызов функции для отправки сообщения о последнем матче
-      logger.info("Спим...")
-      await asyncio.sleep(
-        600)  # Задержка в секундах перед повторным выполнением функции
-  else:
-    print("Не удалось найти указанный канал:")
+    channel = client.get_channel(int(CHANNEL_ID))
+    if channel:
+        while True:
+            await send_latest_match_result(channel)  # Вызов функции для отправки сообщения о последнем матче
+            logger.info("Спим...")
+            await asyncio.sleep(300)  # Задержка в секундах перед повторным выполнением функции
+    else:
+        print("Не удалось найти указанный канал:")
 
 
-keep_alive()
 client.run(TOKEN)
